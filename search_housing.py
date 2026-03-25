@@ -1,7 +1,13 @@
 import asyncio
 import random
 import re
+import requests
+import os
 from playwright.async_api import async_playwright
+from dotenv import load_dotenv
+load_dotenv()
+
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 # ================= 搜尋條件設定區 =================
 TARGET_REGION = "1"  
@@ -12,6 +18,40 @@ TARGET_MAX_PRICE = "50000"
 TARGET_MIN_AREA = "15"
 TARGET_MAX_AREA = ""
 # =================================================
+
+def send_discord_webhook(houses):
+    if not houses or not DISCORD_WEBHOOK_URL:
+        return
+
+    print(f"\n🚀 準備將 {len(houses)} 筆資料推播至 Discord...")
+    
+    # Discord 限制每次請求最多 10 個 embeds，所以我們需要把結果「切塊」
+    for i in range(0, len(houses), 10):
+        chunk = houses[i:i+10]
+        embeds = []
+        
+        for house in chunk:
+            embeds.append({
+                "title": f"🏠 {house['title']}",
+                "url": house['link'],
+                "description": f"💰 **價格**: {house['price']} 元/月\n📏 **坪數**: {house['area']} 坪",
+                "color": 16748339  # 這是 591 標誌性的亮橘色
+            })
+
+        payload = {
+            "username": "NemoClaw 租屋雷達", # 發送者名稱
+            "content": f"🚨 發現 **{len(houses)}** 筆符合條件的物件！" if i == 0 else "",
+            "embeds": embeds
+        }
+
+        try:
+            response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
+            if response.status_code in [200, 204]:
+                print(f"  ✅ 成功推播 {len(chunk)} 筆資料到 Discord！")
+            else:
+                print(f"  ❌ 推播失敗：HTTP {response.status_code} - {response.text}")
+        except Exception as e:
+            print(f"  ❌ 呼叫 Discord API 時發生錯誤: {e}")
 
 async def random_delay(min_sec=1, max_sec=3):
     await asyncio.sleep(random.uniform(min_sec, max_sec))
@@ -190,6 +230,10 @@ async def main():
                 print(f"💰 價格: {res['price']} 元/月 | 📏 坪數: {res['area']} 坪")
                 print(f"🔗 連結: {res['link']}")
                 print("-" * 50)
+
+            # 👈 在這裡加入 Discord 推播！
+            if len(results) > 0:
+                send_discord_webhook(results)
 
         except Exception as e:
             print(f"❌ 發生錯誤: {e}")
