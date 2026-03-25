@@ -3,11 +3,13 @@ import random
 import re
 import requests
 import os
+import json
 from playwright.async_api import async_playwright
 from dotenv import load_dotenv
 load_dotenv()
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+HISTORY_FILE = "history.json"
 
 # ================= 搜尋條件設定區 =================
 TARGET_REGION = "1"  
@@ -18,6 +20,29 @@ TARGET_MAX_PRICE = "50000"
 TARGET_MIN_AREA = "15"
 TARGET_MAX_AREA = ""
 # =================================================
+
+def load_history():
+    """讀取歷史推播紀錄"""
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"⚠️ 讀取 {HISTORY_FILE} 失敗: {e}，將建立新紀錄。")
+            return []
+    return []
+
+def save_history(history_list):
+    """儲存歷史推播紀錄 (最多保留最新的 1000 筆避免檔案過大)"""
+    try:
+        # 只保留最後 1000 筆紀錄
+        if len(history_list) > 1000:
+            history_list = history_list[-1000:]
+            
+        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(history_list, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"❌ 儲存 {HISTORY_FILE} 失敗: {e}")
 
 def send_discord_webhook(houses):
     if not houses or not DISCORD_WEBHOOK_URL:
@@ -225,15 +250,33 @@ async def main():
                     "link": link
                 })
 
-            for idx, res in enumerate(results, 1):
+            # ================= 記憶系統比對區塊 =================
+            history_urls = load_history()
+            new_results = []
+
+            for res in results:
+                # 使用連結 (link) 作為唯一識別碼，檢查是否已推播過
+                if res['link'] not in history_urls:
+                    new_results.append(res)
+                    history_urls.append(res['link']) # 把新物件加入記憶中
+
+            print(f"🧠 經過記憶比對，扣除已推播過的物件，本次共有 {len(new_results)} 筆全新房源！\n")
+
+            # 改為印出 new_results (全新房源)
+            for idx, res in enumerate(new_results, 1):
                 print(f"🏠 [{idx}] {res['title']}")
                 print(f"💰 價格: {res['price']} 元/月 | 📏 坪數: {res['area']} 坪")
                 print(f"🔗 連結: {res['link']}")
                 print("-" * 50)
 
-            # 👈 在這裡加入 Discord 推播！
-            if len(results) > 0:
-                send_discord_webhook(results)
+            # 只有當「有全新房源」時，才觸發 Discord 推播並存檔
+            if len(new_results) > 0:
+                send_discord_webhook(new_results)
+                save_history(history_urls)
+                print("💾 已更新 history.json 記憶檔。")
+            else:
+                print("😴 沒有新的房源，無需推播。")
+            # ====================================================
 
         except Exception as e:
             print(f"❌ 發生錯誤: {e}")
