@@ -1,0 +1,13 @@
+# blueprint.yaml 或 openclaw-sandbox.yaml 範例片段
+sandbox:
+  workspace_mount:
+    # 將你目前的本機目錄，掛載到沙箱內的指定安全讀寫區
+    source: "/Users/jyunkaihuang/Desktop/taiwan-rent-agent"
+    target: "/sandbox"
+
+network_policies:
+  - host: "*.591.com.tw"
+    methods: ["GET", "POST"]
+    binaries: ["/sandbox/venv/bin/python", "chromium"]
+  - host: "notify-api.line.me"
+    methods: ["POST"]
