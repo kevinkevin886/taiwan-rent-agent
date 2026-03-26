@@ -6,17 +6,17 @@ import os
 import json
 from playwright.async_api import async_playwright
 from dotenv import load_dotenv
-load_dotenv()
 
+load_dotenv()
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 HISTORY_FILE = "history.json"
 
 # ================= 搜尋條件設定區 =================
-TARGET_REGION = "1"  
+TARGET_REGION = "1"  # 1: 台北市, 3: 新北市
 SEARCH_KEYWORD = "台大醫院" 
-FILTER_KEYWORDS = ["整層住家", "有車位", "排除頂樓加蓋"] 
-TARGET_MIN_PRICE = "15000"
-TARGET_MAX_PRICE = "50000"
+FILTER_KEYWORDS = ["整層住家", "有電梯"] 
+TARGET_MIN_PRICE = "25000"
+TARGET_MAX_PRICE = "100000"
 TARGET_MIN_AREA = "15"
 TARGET_MAX_AREA = ""
 # =================================================
@@ -35,7 +35,6 @@ def load_history():
 def save_history(history_list):
     """儲存歷史推播紀錄 (最多保留最新的 1000 筆避免檔案過大)"""
     try:
-        # 只保留最後 1000 筆紀錄
         if len(history_list) > 1000:
             history_list = history_list[-1000:]
             
@@ -50,7 +49,6 @@ def send_discord_webhook(houses):
 
     print(f"\n🚀 準備將 {len(houses)} 筆資料推播至 Discord...")
     
-    # Discord 限制每次請求最多 10 個 embeds，所以我們需要把結果「切塊」
     for i in range(0, len(houses), 10):
         chunk = houses[i:i+10]
         embeds = []
@@ -60,12 +58,12 @@ def send_discord_webhook(houses):
                 "title": f"🏠 {house['title']}",
                 "url": house['link'],
                 "description": f"💰 **價格**: {house['price']} 元/月\n📏 **坪數**: {house['area']} 坪",
-                "color": 16748339  # 這是 591 標誌性的亮橘色
+                "color": 16748339  
             })
 
         payload = {
-            "username": "NemoClaw 租屋雷達", # 發送者名稱
-            "content": f"🚨 發現 **{len(houses)}** 筆符合條件的物件！" if i == 0 else "",
+            "username": "NemoClaw 租屋雷達", 
+            "content": f"🚨 發現 **{len(houses)}** 筆符合條件的全新物件！" if i == 0 else "",
             "embeds": embeds
         }
 
@@ -131,11 +129,9 @@ async def main():
                     await max_price_input.fill(TARGET_MAX_PRICE)
                     await random_delay(0.5, 1)
                 
-                # 🎯 尋找包含「最低價」輸入框的那個容器，然後點擊裡面的「確定」按鈕
                 price_container = page.locator('.filter-input-container:has(input[placeholder="最低價"])')
                 confirm_btn = price_container.locator('button:has-text("確定")')
                 
-                # Playwright 會自動等待按鈕出現 (因為我們剛剛填了數字，Vue 會渲染它)
                 await confirm_btn.click()
                 print("  ✅ 成功點擊租金區間的「確定」按鈕！")
                 await random_delay(2.5, 4) 
@@ -154,7 +150,6 @@ async def main():
                     await max_area_input.fill(TARGET_MAX_AREA)
                     await random_delay(0.5, 1)
                 
-                # 🎯 尋找包含「最小坪」輸入框的那個容器，然後點擊裡面的「確定」按鈕
                 area_container = page.locator('.filter-input-container:has(input[placeholder="最小坪"])')
                 confirm_btn = area_container.locator('button:has-text("確定")')
                 
@@ -179,60 +174,90 @@ async def main():
                             print(f"  ⚠️ 找不到包含【{keyword}】的元件")
                     except Exception as e:
                         print(f"  ❌ 點擊【{keyword}】時發生錯誤: {e}")
-                print("✅ 篩選條件設定完畢，準備擷取最終結果...\n")
-
-            # 模擬向下滾動，載入圖片與隱藏卡片
-            for _ in range(3):
-                await page.evaluate("window.scrollBy(0, 800)")
-                await random_delay(1, 2)
-
-            print("🎯 啟動精準打擊，抓取畫面上所有的租屋卡片...")
-            
-            # --- 視覺抓取與 DOM 解析邏輯 (保持不變) ---
-            houses_data = await page.evaluate('''() => {
-                const results = [];
-                const titleDivs = document.querySelectorAll('.item-info-title');
                 
-                titleDivs.forEach(titleDiv => {
-                    const linkTag = titleDiv.querySelector('a.link');
-                    if (!linkTag) return;
+            print("\n✅ 篩選條件設定完畢，準備擷取最終結果...")
 
-                    const title = linkTag.getAttribute('title') || linkTag.innerText;
-                    const link = linkTag.href;
+            # ================= 自動翻頁與抓取邏輯 =================
+            MAX_PAGES = 5 
+            all_houses_data = []
 
-                    let currentParent = titleDiv;
-                    let flexDiv = null;
-                    for(let i = 0; i < 3; i++) {
-                        currentParent = currentParent.parentElement;
-                        if(currentParent) {
-                            flexDiv = currentParent.querySelector('.item-info-flex');
-                            if(flexDiv) break; 
+            for current_page in range(1, MAX_PAGES + 1):
+                print(f"📄 正在抓取第 {current_page} 頁資料...")
+
+                for _ in range(3):
+                    await page.evaluate("window.scrollBy(0, 800)")
+                    await random_delay(1, 2)
+
+                print("  🎯 啟動視覺抓取...")
+                
+                houses_data = await page.evaluate('''() => {
+                    const results = [];
+                    const titleDivs = document.querySelectorAll('.item-info-title');
+                    
+                    titleDivs.forEach(titleDiv => {
+                        const linkTag = titleDiv.querySelector('a.link');
+                        if (!linkTag) return;
+
+                        const title = linkTag.getAttribute('title') || linkTag.innerText;
+                        const link = linkTag.href;
+
+                        let currentParent = titleDiv;
+                        let flexDiv = null;
+                        for(let i = 0; i < 3; i++) {
+                            currentParent = currentParent.parentElement;
+                            if(currentParent) {
+                                flexDiv = currentParent.querySelector('.item-info-flex');
+                                if(flexDiv) break; 
+                            }
                         }
-                    }
 
-                    let price_str = "";
-                    let raw_text = titleDiv.innerText;
+                        let price_str = "";
+                        let raw_text = titleDiv.innerText;
 
-                    if (flexDiv) {
-                        raw_text += " | " + flexDiv.innerText;
-                        const priceNode = flexDiv.querySelector('.item-info-price strong');
-                        if (priceNode) price_str = priceNode.innerText;
-                    }
+                        if (flexDiv) {
+                            raw_text += " | " + flexDiv.innerText;
+                            const priceNode = flexDiv.querySelector('.item-info-price strong');
+                            if (priceNode) price_str = priceNode.innerText;
+                        }
 
-                    results.push({
-                        title: title,
-                        link: link,
-                        price_str: price_str,
-                        raw_text: raw_text
+                        results.push({
+                            title: title,
+                            link: link,
+                            price_str: price_str,
+                            raw_text: raw_text
+                        });
                     });
-                });
-                return results;
-            }''')
+                    return results;
+                }''')
 
-            print(f"\n✅ 成功擷取 {len(houses_data)} 個符合所有條件的租屋卡片！\n")
+                all_houses_data.extend(houses_data)
+                print(f"  ✅ 本頁擷取了 {len(houses_data)} 個卡片。")
+
+                # 尋找「下一頁」按鈕
+                next_btn = page.locator("span.navigator:has-text('下一頁')").first
+                
+                if await next_btn.count() > 0:
+                    is_disabled = await next_btn.evaluate("el => el.classList.contains('disabled')")
+                    
+                    if not is_disabled and current_page < MAX_PAGES:
+                        print(f"  👉 點擊「下一頁」，準備前往第 {current_page + 1} 頁...\n")
+                        await next_btn.click()
+                        await random_delay(3, 5) 
+                    elif is_disabled:
+                        print("  🛑 「下一頁」按鈕已禁用，代表已達最後一頁。")
+                        break
+                    else:
+                        print(f"  🛑 已達到設定的最大翻頁限制 ({MAX_PAGES} 頁)。")
+                        break
+                else:
+                    print("  🛑 畫面上找不到「下一頁」按鈕，可能只有一頁。")
+                    break
+            # ====================================================
+
+            print(f"\n🎉 爬取結束！總共擷取 {len(all_houses_data)} 個原始租屋卡片！\n")
             
             results = []
-            for house in houses_data:
+            for house in all_houses_data:
                 title = house['title']
                 link = house['link']
                 text = house['raw_text'].replace('\n', ' ') 
@@ -255,21 +280,18 @@ async def main():
             new_results = []
 
             for res in results:
-                # 使用連結 (link) 作為唯一識別碼，檢查是否已推播過
                 if res['link'] not in history_urls:
                     new_results.append(res)
-                    history_urls.append(res['link']) # 把新物件加入記憶中
+                    history_urls.append(res['link'])
 
             print(f"🧠 經過記憶比對，扣除已推播過的物件，本次共有 {len(new_results)} 筆全新房源！\n")
 
-            # 改為印出 new_results (全新房源)
             for idx, res in enumerate(new_results, 1):
                 print(f"🏠 [{idx}] {res['title']}")
                 print(f"💰 價格: {res['price']} 元/月 | 📏 坪數: {res['area']} 坪")
                 print(f"🔗 連結: {res['link']}")
                 print("-" * 50)
 
-            # 只有當「有全新房源」時，才觸發 Discord 推播並存檔
             if len(new_results) > 0:
                 send_discord_webhook(new_results)
                 save_history(history_urls)
